@@ -42,11 +42,20 @@ $(TARGET): $(OBJS)
 	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Rule to clean up build artifacts
+# Rule to clean up build artifacts AND other files except sources/Makefile
+# Uses find to delete files in the current directory only, excluding the specified ones.
 clean:
-	@echo "Cleaning up..."
+	@echo "Cleaning up build artifacts and other generated files..."
+	# Remove the target executable and object files specifically first
 	rm -f $(TARGET) $(OBJS)
-	@echo "Cleanup complete."
+	# Then remove any other files except the source, header, and Makefile
+	# -maxdepth 1: Don't go into subdirectories
+	# -type f: Only consider files
+	# ! -name ...: Exclude these specific files
+	# -delete: Delete the found files
+	find . -maxdepth 1 -type f ! -name '$(SRCS)' ! -name '$(HDRS)' ! -name 'Makefile' -delete
+	@echo "Cleanup complete. Kept: $(SRCS), $(HDRS), Makefile"
+
 
 # Declare 'all' and 'clean' as phony targets, meaning they aren't actual files
 .PHONY: all clean

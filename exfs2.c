@@ -1161,15 +1161,88 @@ slot_found: // Label for goto.
 
         // Write the initialized block to the data segment.
         if (write_data_block(new_block, block_buffer) != 0) {
-            fprintf(stderr, "Error writing newly allocated directory block %u.\n", new_block);
-            // Attempt to rollback: clear the pointer in the inode and free the block.
-            // This rollback is complex if indirect blocks were involved/allocated. Simplified rollback:
-             if (first_free_block_level == 0) {
-                 dir_inode.direct_blocks[first_free_block_ptr_index] = 0;
-             } // TODO: Add rollback for indirect pointers
-             write_inode(dir_inode_num, &dir_inode); // Attempt to write back inode change
-             free_data_block(new_block); // Free the allocated block.
-            return -1;
+            // --- Rollback Logic for Pointer Storage ---
+            fprintf(stderr, "Attempting rollback for pointer to failed block %u...\n", new_block);
+
+            if (first_free_block_level == 0) {
+                // Pointer was stored in a direct block slot
+                if (first_free_block_ptr_index < MAX_DIRECT_POINTERS) {
+                    dir_inode.direct_blocks[first_free_block_ptr_index] = 0; // Clear pointer in memory
+                    // Attempt to write the inode back to revert the pointer change on disk
+                    if (write_inode(dir_inode_num, &dir_inode) != 0) {
+                         fprintf(stderr, "Rollback Warning: Failed to write inode %u to clear direct pointer.\n", dir_inode_num);
+                    } else {
+                         fprintf(stderr, "Rollback: Cleared direct pointer in inode %u.\n", dir_inode_num);
+                    }
+                }
+            } else if (first_free_block_level == 1) {
+                // Pointer was stored in a single indirect block
+                uint32_t single_indirect_num = single_indirect_block_for_new_ptr;
+                if (single_indirect_num != 0 && single_indirect_num != UINT32_MAX) {
+                    uint32_t pointers[POINTERS_PER_BLOCK];
+                    char indirect_buf[BLOCK_SIZE];
+                    if (read_data_block(single_indirect_num, indirect_buf) == 0) {
+                        memcpy(pointers, indirect_buf, BLOCK_SIZE);
+                        if (first_free_block_ptr_index < POINTERS_PER_BLOCK) {
+                            pointers[first_free_block_ptr_index] = 0; // Clear pointer in the indirect block data
+                            // Attempt to write the modified single indirect block back
+                            if (write_data_block(single_indirect_num, (char*)pointers) != 0) {
+                                fprintf(stderr, "Rollback Warning: Failed to write single indirect block %u to clear pointer.\n", single_indirect_num);
+                            } else {
+                                fprintf(stderr, "Rollback: Cleared pointer in single indirect block %u.\n", single_indirect_num);
+                            }
+                        }
+                    } else {
+                         fprintf(stderr, "Rollback Warning: Failed to read single indirect block %u to clear pointer.\n", single_indirect_num);
+                    }
+                }
+                 // We don't attempt to free the single indirect block itself here,
+                 // nor revert the inode's single_indirect pointer if it was newly set.
+                 // Write inode back if it was potentially modified (e.g., single_indirect pointer added)
+                 // Note: This might write the pointer *to* the indirect block even if clearing inside failed.
+                 if (write_inode(dir_inode_num, &dir_inode) != 0) {
+                    fprintf(stderr, "Rollback Warning: Failed write inode %u after attempting single indirect rollback.\n", dir_inode_num);
+                 }
+
+
+            } else if (first_free_block_level == 2) {
+                // Pointer was stored via a double indirect block path
+                uint32_t double_indirect_num = double_indirect_block_for_new_ptr;
+                uint32_t single_indirect_num = single_indirect_block_for_new_ptr; // The specific single indirect block involved
+                uint32_t idx1 = first_free_block_ptr_index / POINTERS_PER_BLOCK; // Index in double indirect
+                uint32_t idx2 = first_free_block_ptr_index % POINTERS_PER_BLOCK; // Index in single indirect
+
+                if (single_indirect_num != 0 && single_indirect_num != UINT32_MAX) {
+                     uint32_t pointers2[POINTERS_PER_BLOCK];
+                     char block_buffer2[BLOCK_SIZE];
+                     if (read_data_block(single_indirect_num, block_buffer2) == 0) {
+                         memcpy(pointers2, block_buffer2, BLOCK_SIZE);
+                         if (idx2 < POINTERS_PER_BLOCK) {
+                             pointers2[idx2] = 0; // Clear pointer in the single indirect block data
+                             // Attempt to write the modified single indirect block back
+                             if (write_data_block(single_indirect_num, (char*)pointers2) != 0) {
+                                 fprintf(stderr, "Rollback Warning: Failed write single indirect block %u (from double) to clear pointer.\n", single_indirect_num);
+                             } else {
+                                 fprintf(stderr, "Rollback: Cleared pointer in single indirect block %u (from double).\n", single_indirect_num);
+                             }
+                         }
+                     } else {
+                          fprintf(stderr, "Rollback Warning: Failed read single indirect block %u (from double) to clear pointer.\n", single_indirect_num);
+                     }
+                }
+                 // We don't attempt to free the single or double indirect blocks themselves,
+                 // nor revert the pointers to them in the inode or higher-level blocks.
+                 // Write inode back if it was potentially modified (e.g., double_indirect pointer added)
+                 // Note: This might write pointers *to* indirect blocks even if clearing inside failed.
+                 if (write_inode(dir_inode_num, &dir_inode) != 0) {
+                    fprintf(stderr, "Rollback Warning: Failed write inode %u after attempting double indirect rollback.\n", dir_inode_num);
+                 }
+            }
+            // --- End of Rollback Logic ---
+
+            // Free the data block that failed to write, regardless of pointer rollback success.
+            free_data_block(new_block);
+            return -1; // Return error from the original write failure
         }
 
         // --- Update directory inode size and write it back ---
