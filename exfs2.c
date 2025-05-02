@@ -51,11 +51,6 @@ FILE* open_segment(const char* prefix, int index, const char* mode) {
             rewind(fp); // Go back to the beginning of the newly created file
          }
     }
-    // If opening/creating ultimately failed, print an error.
-     if (!fp) {
-         fprintf(stderr, "Error opening/creating segment %s: %s\n", filename, strerror(errno));
-     }
-    // Return the file pointer (or NULL if failed).
     return fp;
 }
 
@@ -240,7 +235,7 @@ uint32_t find_free_inode() {
 
     } else {
         // Failed to create a new inode segment.
-        fprintf(stderr, "Failed to create new inode segment.\n");
+        //fprintf(stderr, "Failed to create new inode segment.\n");
         return UINT32_MAX; // Indicate error.
     }
 }
@@ -1977,7 +1972,7 @@ void add_file_to_fs(const char *exfs_path, const char *local_path) {
     // 1. Open the local source file for reading in binary mode.
     FILE *local_fp = fopen(local_path, "rb");
     if (!local_fp) {
-        perror("Failed to open local file for reading");
+        //perror("Failed to open local file for reading");
         return;
     }
 
